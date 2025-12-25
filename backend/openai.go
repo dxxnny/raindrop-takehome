@@ -10,7 +10,9 @@ import (
 )
 
 type OpenAIClient struct {
-	apiKey string
+	apiKey          string
+	grammar         string
+	toolDescription string
 }
 
 func NewOpenAIClient() *OpenAIClient {
@@ -19,18 +21,24 @@ func NewOpenAIClient() *OpenAIClient {
 	}
 }
 
+// SetSchema updates the grammar and tool description based on schema
+func (c *OpenAIClient) SetSchema(schema *Schema) {
+	c.grammar = schema.GenerateGrammar()
+	c.toolDescription = schema.GenerateToolDescription()
+}
+
 // Request/Response types for OpenAI Responses API
 type ResponsesRequest struct {
-	Model             string        `json:"model"`
-	Input             string        `json:"input"`
-	Tools             []Tool        `json:"tools"`
-	ParallelToolCalls bool          `json:"parallel_tool_calls"`
+	Model             string `json:"model"`
+	Input             string `json:"input"`
+	Tools             []Tool `json:"tools"`
+	ParallelToolCalls bool   `json:"parallel_tool_calls"`
 }
 
 type Tool struct {
-	Type        string     `json:"type"`
-	Name        string     `json:"name"`
-	Description string     `json:"description"`
+	Type        string      `json:"type"`
+	Name        string      `json:"name"`
+	Description string      `json:"description"`
 	Format      *ToolFormat `json:"format,omitempty"`
 }
 
@@ -57,18 +65,28 @@ type OutputItem struct {
 }
 
 func (c *OpenAIClient) GenerateSQL(naturalLanguage string) (string, error) {
+	// Use dynamic grammar if set, otherwise fall back to static
+	grammar := c.grammar
+	if grammar == "" {
+		grammar = ClickHouseGrammar
+	}
+	toolDesc := c.toolDescription
+	if toolDesc == "" {
+		toolDesc = ToolDescription
+	}
+
 	reqBody := ResponsesRequest{
 		Model: "gpt-5",
-		Input: fmt.Sprintf("Convert this natural language query to a valid ClickHouse SQL query for the order_items table. Call the sql_generator tool with the query.\n\nQuery: %s", naturalLanguage),
+		Input: fmt.Sprintf("Convert this natural language query to a valid ClickHouse SQL query. Call the sql_generator tool with the query.\n\nQuery: %s", naturalLanguage),
 		Tools: []Tool{
 			{
 				Type:        "custom",
 				Name:        "sql_generator",
-				Description: ToolDescription,
+				Description: toolDesc,
 				Format: &ToolFormat{
 					Type:       "grammar",
 					Syntax:     "lark",
-					Definition: ClickHouseGrammar,
+					Definition: grammar,
 				},
 			},
 		},
@@ -116,4 +134,3 @@ func (c *OpenAIClient) GenerateSQL(naturalLanguage string) (string, error) {
 
 	return "", fmt.Errorf("no SQL generated in response")
 }
-

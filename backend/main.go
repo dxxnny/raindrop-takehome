@@ -47,12 +47,54 @@ func main() {
 		slog.Info("Config loaded", "key", "TINYBIRD_TOKEN", "status", "ok")
 	}
 
-	openai := NewOpenAIClient()
 	tinybird := NewTinybirdClient()
+	openai := NewOpenAIClient()
+
+	// Fetch schema from Tinybird and generate dynamic grammar
+	slog.Info("Fetching schema from Tinybird...")
+	schema, err := tinybird.FetchSchema()
+	if err != nil {
+		slog.Error("Failed to fetch schema", "error", err)
+		slog.Warn("Using static grammar as fallback")
+	} else {
+		openai.SetSchema(schema)
+		slog.Info("Schema loaded", "tables", len(schema.Datasources))
+		for _, ds := range schema.Datasources {
+			slog.Debug("Table loaded", "name", ds.Name, "columns", len(ds.Columns))
+		}
+	}
+
+	// Run startup evals
+	slog.Info("Running startup evals...")
+	results, err := RunStartupEvals(openai, tinybird)
+	LogEvalResults(results)
+	if err != nil {
+		slog.Error("Startup evals failed", "error", err)
+		os.Exit(1)
+	}
+	slog.Info("Startup evals passed")
 
 	// Serve static files for frontend
 	fs := http.FileServer(http.Dir("../frontend"))
 	http.Handle("/", fs)
+
+	// Eval endpoint - run evals on demand
+	http.HandleFunc("/api/eval", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		slog.Info("Running evals on demand")
+
+		results, err := RunStartupEvals(openai, tinybird)
+		LogEvalResults(results)
+
+		response := map[string]interface{}{
+			"results": results,
+			"passed":  err == nil,
+		}
+		if err != nil {
+			response["error"] = err.Error()
+		}
+		json.NewEncoder(w).Encode(response)
+	})
 
 	// API endpoint
 	http.HandleFunc("/api/query", func(w http.ResponseWriter, r *http.Request) {
