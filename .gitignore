@@ -1,0 +1,26 @@
+# Environment files
+.env
+*.env
+.env.local
+.env*.local
+.tinyb
+
+# Binaries
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Build artifacts
+tmp/
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Vercel
+.vercel

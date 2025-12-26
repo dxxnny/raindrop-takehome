@@ -1,0 +1,11 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "go run ./cmd/eval-check",
+  "outputDirectory": "public",
+  "framework": null,
+  "rewrites": [
+    { "source": "/api/query", "destination": "/api/query" },
+    { "source": "/api/eval", "destination": "/api/eval" }
+  ]
+}
+

@@ -224,3 +224,23 @@ func (s *Schema) GenerateToolDescription() string {
 	return sb.String()
 }
 
+// GenerateUserHint creates a brief, user-friendly summary of available data
+func (s *Schema) GenerateUserHint() string {
+	if len(s.Datasources) == 0 {
+		return "No data available."
+	}
+
+	var parts []string
+	for _, ds := range s.Datasources {
+		colNames := make([]string, 0, len(ds.Columns))
+		for _, col := range ds.Columns {
+			colNames = append(colNames, col.Name)
+		}
+		sort.Strings(colNames)
+		parts = append(parts, fmt.Sprintf("%s (%s)", ds.Name, strings.Join(colNames, ", ")))
+	}
+	sort.Strings(parts)
+
+	return "Available data: " + strings.Join(parts, "; ")
+}
+

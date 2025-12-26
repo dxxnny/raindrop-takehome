@@ -13,12 +13,14 @@ type OpenAIClient struct {
 	apiKey          string
 	grammar         string
 	toolDescription string
+	userHint        string
 }
 
 // ErrUnsupportedQuery is returned when the LLM determines the query
 // cannot be answered with the available schema.
 type ErrUnsupportedQuery struct {
-	Reason string
+	Reason        string
+	AvailableData string
 }
 
 func (e ErrUnsupportedQuery) Error() string {
@@ -35,6 +37,7 @@ func NewOpenAIClient(cfg *Config) *OpenAIClient {
 func (c *OpenAIClient) SetSchema(schema *Schema) {
 	c.grammar = schema.GenerateGrammar()
 	c.toolDescription = schema.GenerateToolDescription()
+	c.userHint = schema.GenerateUserHint()
 }
 
 // Request/Response types for OpenAI Responses API
@@ -173,9 +176,15 @@ Query: %s`,
 		if item.Type == "function_call" && item.Name == "cannot_answer" {
 			var input CannotAnswerInput
 			if err := json.Unmarshal([]byte(item.Input), &input); err != nil {
-				return "", ErrUnsupportedQuery{Reason: "Query cannot be answered with available data"}
+				return "", ErrUnsupportedQuery{
+					Reason:        "Query cannot be answered with available data",
+					AvailableData: c.userHint,
+				}
 			}
-			return "", ErrUnsupportedQuery{Reason: input.Reason}
+			return "", ErrUnsupportedQuery{
+				Reason:        input.Reason,
+				AvailableData: c.userHint,
+			}
 		}
 	}
 
