@@ -35,3 +35,35 @@ public/                # Static frontend
 | `TINYBIRD_TOKEN` | Tinybird read token |
 
 *Automated evals run at build-time and will fail the deployment if any test fails.*
+
+## API Endpoints
+
+### POST /api/query
+
+Converts natural language to SQL and executes it.
+
+```bash
+curl -X POST https://your-app.vercel.app/api/query \
+  -H "Content-Type: application/json" \
+  -d '{"query": "What is the total revenue?"}'
+```
+
+Response:
+```json
+{"sql": "SELECT SUM(price) FROM order_items;", "data": [{"sum(price)": 123456.78}], "rows": 1}
+```
+
+If the query can't be answered, returns an error with a hint about available data.
+
+### GET /api/eval
+
+Runs the test suite on-demand and returns results.
+
+```bash
+curl https://your-app.vercel.app/api/eval
+```
+
+Response:
+```json
+{"passed": true, "summary": {"total": 7, "passed": 7, "failed": 0, "pass_rate": 100}}
+```
