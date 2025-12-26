@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SQL Query Generator ❄️</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css?v=2">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🎄 Natural Language <span class="highlight">→</span> SQL 🎄</h1>
+            <p class="subtitle">Query your order data using plain English</p>
+        </header>
+
+        <main>
+            <div class="query-section">
+                <label for="query-input">Ask a question about orders</label>
+                <div class="input-wrapper">
+                    <textarea 
+                        id="query-input" 
+                        placeholder="e.g., What is the total revenue from all orders?"
+                        rows="2"
+                    ></textarea>
+                    <button id="submit-btn" onclick="submitQuery()">
+                        <span class="btn-text">Generate</span>
+                        <span class="btn-loading" style="display: none;">
+                            <svg class="spinner" viewBox="0 0 24 24">
+                                <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" fill="none" stroke-dasharray="31.4 31.4" stroke-linecap="round"/>
+                            </svg>
+                        </span>
+                    </button>
+                </div>
+                <div class="examples">
+                    <span>Try:</span>
+                    <button class="example-btn" onclick="setExample('What is the total revenue?')">Total revenue</button>
+                    <button class="example-btn" onclick="setExample('Show me the top 10 orders by price')">Top 10 orders</button>
+                    <button class="example-btn" onclick="setExample('Average shipping cost per order')">Avg shipping</button>
+                </div>
+            </div>
+
+            <div id="results" class="results-section" style="display: none;">
+                <div class="sql-output">
+                    <div class="section-header">
+                        <h3>Generated SQL</h3>
+                        <span class="badge">CFG Constrained</span>
+                    </div>
+                    <pre><code id="sql-code"></code></pre>
+                </div>
+
+                <div class="data-output">
+                    <div class="section-header">
+                        <h3>Results</h3>
+                        <span id="row-count" class="badge"></span>
+                    </div>
+                    <div id="data-table-wrapper">
+                        <table id="data-table">
+                            <thead id="table-head"></thead>
+                            <tbody id="table-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <div id="error" class="error-section" style="display: none;">
+                <div class="error-content">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"/>
+                        <line x1="12" y1="8" x2="12" y2="12"/>
+                        <line x1="12" y1="16" x2="12.01" y2="16"/>
+                    </svg>
+                    <span id="error-message"></span>
+                </div>
+                <div id="error-hint" class="error-hint" style="display: none;"></div>
+            </div>
+        </main>
+
+        <footer>
+            <p>🎅 Merry Christmas! • Raindrop Takehome Assignment ❄️</p>
+        </footer>
+    </div>
+
+    <script src="app.js?v=2"></script>
+</body>
+</html>
+
