@@ -1,6 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "buildCommand": "go run ./cmd/eval-check",
+  "buildCommand": "curl -sL https://go.dev/dl/go1.21.0.linux-amd64.tar.gz | tar -C /tmp -xzf - && /tmp/go/bin/go run ./cmd/eval-check",
   "outputDirectory": "public",
   "framework": null,
   "rewrites": [
@@ -8,4 +8,3 @@
     { "source": "/api/eval", "destination": "/api/eval" }
   ]
 }
-
