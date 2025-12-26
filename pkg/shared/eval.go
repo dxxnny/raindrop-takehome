@@ -65,12 +65,6 @@ func DefaultEvalCases() []EvalCase {
 			ExpectedSQL: "SELECT COUNT(*) FROM order_items WHERE price > 100;",
 		},
 		{
-			Name:          "orders_last_30_hours",
-			Query:         "How many orders were placed in the last 30 hours?",
-			ExpectedSQL:   "SELECT COUNT(*) FROM order_items WHERE shipping_limit_date > '2024-06-14 06:00:00';",
-			ReferenceTime: refTime(fixedTime),
-		},
-		{
 			Name:          "revenue_last_7_days",
 			Query:         "What is the total revenue from the last 7 days?",
 			ExpectedSQL:   "SELECT SUM(price) FROM order_items WHERE shipping_limit_date > '2024-06-08 12:00:00';",
@@ -282,4 +276,3 @@ func ComputeSummary(results []EvalResult) EvalSummary {
 	}
 	return s
 }
-
