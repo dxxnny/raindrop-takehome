@@ -14,10 +14,20 @@ function setLoading(loading) {
     btnLoading.style.display = loading ? 'inline' : 'none';
 }
 
-function showError(message) {
+function showError(message, hint) {
     document.getElementById('results').style.display = 'none';
     const errorEl = document.getElementById('error');
+    const hintEl = document.getElementById('error-hint');
+    
     document.getElementById('error-message').textContent = message;
+    
+    if (hint) {
+        hintEl.textContent = hint;
+        hintEl.style.display = 'block';
+    } else {
+        hintEl.style.display = 'none';
+    }
+    
     errorEl.style.display = 'block';
 }
 
@@ -101,7 +111,7 @@ async function submitQuery() {
         const data = await response.json();
         
         if (data.error) {
-            showError(data.error);
+            showError(data.error, data.hint);
         } else {
             showResults(data);
         }

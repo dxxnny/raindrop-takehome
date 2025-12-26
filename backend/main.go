@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"os"
@@ -9,6 +10,12 @@ import (
 
 	"github.com/joho/godotenv"
 )
+
+// Server holds the application dependencies
+type Server struct {
+	openai   *OpenAIClient
+	tinybird *TinybirdClient
+}
 
 type QueryRequest struct {
 	Query string `json:"query"`
@@ -19,49 +26,46 @@ type QueryResponse struct {
 	Data  []map[string]interface{} `json:"data"`
 	Rows  int                      `json:"rows"`
 	Error string                   `json:"error,omitempty"`
+	Hint  string                   `json:"hint,omitempty"`
 }
 
 func main() {
-	// Setup slog with pretty console output
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelDebug,
+		Level:     slog.LevelDebug,
+		AddSource: true,
 	}))
 	slog.SetDefault(logger)
 
 	slog.Info("Starting server", "name", "Natural Language → SQL")
 
-	// Load .env file
+	// Load .env file (optional - env vars may come from elsewhere)
 	if err := godotenv.Load(); err != nil {
-		slog.Warn("No .env file found, using environment variables")
+		slog.Debug("No .env file found, using environment variables")
 	}
 
-	// Check credentials
-	if os.Getenv("OPENAI_API_KEY") == "" {
-		slog.Error("OPENAI_API_KEY not set")
-	} else {
-		slog.Info("Config loaded", "key", "OPENAI_API_KEY", "status", "ok")
-	}
-	if os.Getenv("TINYBIRD_TOKEN") == "" {
-		slog.Error("TINYBIRD_TOKEN not set")
-	} else {
-		slog.Info("Config loaded", "key", "TINYBIRD_TOKEN", "status", "ok")
-	}
+	// Load and validate all config - fails hard if anything is missing
+	cfg := LoadConfig()
+	slog.Info("Config loaded",
+		"openai", "ok",
+		"tinybird_host", cfg.TinybirdHost,
+		"port", cfg.Port,
+	)
 
-	tinybird := NewTinybirdClient()
-	openai := NewOpenAIClient()
+	tinybird := NewTinybirdClient(cfg)
+	openai := NewOpenAIClient(cfg)
 
-	// Fetch schema from Tinybird and generate dynamic grammar
+	// Fetch schema from Tinybird - FAIL HARD if this doesn't work
 	slog.Info("Fetching schema from Tinybird...")
 	schema, err := tinybird.FetchSchema()
 	if err != nil {
-		slog.Error("Failed to fetch schema", "error", err)
-		slog.Warn("Using static grammar as fallback")
-	} else {
-		openai.SetSchema(schema)
-		slog.Info("Schema loaded", "tables", len(schema.Datasources))
-		for _, ds := range schema.Datasources {
-			slog.Debug("Table loaded", "name", ds.Name, "columns", len(ds.Columns))
-		}
+		slog.Error("FATAL: Failed to fetch schema", "error", err)
+		os.Exit(1)
+	}
+
+	openai.SetSchema(schema)
+	slog.Info("Schema loaded", "tables", len(schema.Datasources))
+	for _, ds := range schema.Datasources {
+		slog.Debug("Table loaded", "name", ds.Name, "columns", len(ds.Columns))
 	}
 
 	// Run startup evals
@@ -74,120 +78,142 @@ func main() {
 	}
 	slog.Info("Startup evals passed")
 
+	srv := &Server{openai: openai, tinybird: tinybird}
+
 	// Serve static files for frontend
-	fs := http.FileServer(http.Dir("../frontend"))
-	http.Handle("/", fs)
+	http.Handle("/", http.FileServer(http.Dir("../frontend")))
+	http.HandleFunc("/api/eval", srv.handleEval)
+	http.HandleFunc("/api/query", srv.handleQuery)
 
-	// Eval endpoint - run evals on demand
-	http.HandleFunc("/api/eval", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		slog.Info("Running evals on demand")
+	slog.Info("Server listening", "port", cfg.Port, "url", "http://localhost:"+cfg.Port)
+	if err := http.ListenAndServe(":"+cfg.Port, nil); err != nil {
+		slog.Error("Server failed", "error", err)
+		os.Exit(1)
+	}
+}
 
-		results, err := RunStartupEvals(openai, tinybird)
-		LogEvalResults(results)
+// handleEval runs evals on demand
+func (s *Server) handleEval(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
 
-		response := map[string]interface{}{
-			"results": results,
-			"passed":  err == nil,
-		}
-		if err != nil {
-			response["error"] = err.Error()
-		}
-		json.NewEncoder(w).Encode(response)
-	})
+	if r.Method != http.MethodGet && r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		json.NewEncoder(w).Encode(map[string]string{"error": "method not allowed"})
+		return
+	}
 
-	// API endpoint
-	http.HandleFunc("/api/query", func(w http.ResponseWriter, r *http.Request) {
-		ctx := r.Context()
-		start := time.Now()
+	slog.Info("Running evals on demand")
 
-		// CORS
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-		w.Header().Set("Content-Type", "application/json")
+	results, err := RunStartupEvals(s.openai, s.tinybird)
+	LogEvalResults(results)
 
-		if r.Method == "OPTIONS" {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
+	summary := ComputeSummary(results)
+	response := map[string]interface{}{
+		"results": results,
+		"summary": summary,
+		"passed":  err == nil,
+	}
+	if err != nil {
+		response["error"] = err.Error()
+	}
+	json.NewEncoder(w).Encode(response)
+}
 
-		if r.Method != "POST" {
-			slog.WarnContext(ctx, "Method not allowed", "method", r.Method)
-			json.NewEncoder(w).Encode(QueryResponse{Error: "method not allowed"})
-			return
-		}
+// handleQuery handles natural language to SQL conversion
+func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	start := time.Now()
 
-		var req QueryRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			slog.ErrorContext(ctx, "Invalid request body", "error", err)
-			json.NewEncoder(w).Encode(QueryResponse{Error: "invalid request body"})
-			return
-		}
+	// CORS headers
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+	w.Header().Set("Content-Type", "application/json")
 
-		if req.Query == "" {
-			slog.WarnContext(ctx, "Empty query received")
-			json.NewEncoder(w).Encode(QueryResponse{Error: "query is required"})
-			return
-		}
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
 
-		slog.InfoContext(ctx, "Query received", "query", req.Query)
+	if r.Method != http.MethodPost {
+		slog.WarnContext(ctx, "Method not allowed", "method", r.Method)
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		json.NewEncoder(w).Encode(QueryResponse{Error: "method not allowed"})
+		return
+	}
 
-		// Generate SQL using GPT-5 with CFG
-		slog.DebugContext(ctx, "Calling GPT-5 with CFG")
-		sqlStart := time.Now()
-		sql, err := openai.GenerateSQL(req.Query)
-		sqlDuration := time.Since(sqlStart)
+	var req QueryRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		slog.ErrorContext(ctx, "Invalid request body", "error", err)
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(QueryResponse{Error: "invalid request body"})
+		return
+	}
 
-		if err != nil {
-			slog.ErrorContext(ctx, "OpenAI error", "error", err, "duration", sqlDuration)
-			json.NewEncoder(w).Encode(QueryResponse{Error: err.Error()})
-			return
-		}
-		slog.InfoContext(ctx, "SQL generated", "sql", sql, "duration", sqlDuration)
+	if req.Query == "" {
+		slog.WarnContext(ctx, "Empty query received")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(QueryResponse{Error: "query is required"})
+		return
+	}
 
-		// Execute against Tinybird
-		slog.DebugContext(ctx, "Executing query on Tinybird")
-		dbStart := time.Now()
-		result, err := tinybird.ExecuteQuery(sql)
-		dbDuration := time.Since(dbStart)
+	slog.InfoContext(ctx, "Query received", "query", req.Query)
 
-		if err != nil {
-			slog.ErrorContext(ctx, "Tinybird error", "error", err, "sql", sql, "duration", dbDuration)
+	// Generate SQL using GPT-5 with CFG
+	slog.DebugContext(ctx, "Calling GPT-5 with CFG", "input", req.Query)
+	sqlStart := time.Now()
+	sql, err := s.openai.GenerateSQL(req.Query)
+	sqlDuration := time.Since(sqlStart)
+
+	if err != nil {
+		// Check if the query is unsupported (can't be answered with available data)
+		var unsupportedErr ErrUnsupportedQuery
+		if errors.As(err, &unsupportedErr) {
+			slog.InfoContext(ctx, "Unsupported query", "reason", unsupportedErr.Reason, "duration", sqlDuration)
+			w.WriteHeader(http.StatusBadRequest)
 			json.NewEncoder(w).Encode(QueryResponse{
-				SQL:   sql,
-				Error: err.Error(),
+				Error: unsupportedErr.Reason,
+				Hint:  unsupportedErr.AvailableData,
 			})
 			return
 		}
 
-		// Log result summary
-		slog.InfoContext(ctx, "Query executed",
-			"rows", result.Rows,
-			"db_duration", dbDuration,
-			"total_duration", time.Since(start),
-		)
+		slog.ErrorContext(ctx, "OpenAI error", "error", err, "duration", sqlDuration)
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(QueryResponse{Error: err.Error()})
+		return
+	}
+	slog.InfoContext(ctx, "SQL generated", "sql", sql, "duration", sqlDuration)
 
-		// Log first row as sample
-		if len(result.Data) > 0 {
-			slog.DebugContext(ctx, "Sample result", "row", result.Data[0])
-		}
+	// Execute against Tinybird
+	slog.DebugContext(ctx, "Executing query on Tinybird")
+	dbStart := time.Now()
+	result, err := s.tinybird.ExecuteQuery(sql)
+	dbDuration := time.Since(dbStart)
 
+	if err != nil {
+		slog.ErrorContext(ctx, "Tinybird error", "error", err, "sql", sql, "duration", dbDuration)
+		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(QueryResponse{
-			SQL:  sql,
-			Data: result.Data,
-			Rows: result.Rows,
+			SQL:   sql,
+			Error: err.Error(),
 		})
+		return
+	}
+
+	slog.InfoContext(ctx, "Query executed",
+		"rows", result.Rows,
+		"db_duration", dbDuration,
+		"total_duration", time.Since(start),
+	)
+
+	if len(result.Data) > 0 {
+		slog.DebugContext(ctx, "Sample result", "row", result.Data[0])
+	}
+
+	json.NewEncoder(w).Encode(QueryResponse{
+		SQL:  sql,
+		Data: result.Data,
+		Rows: result.Rows,
 	})
-
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
-	}
-
-	slog.Info("Server listening", "port", port, "url", "http://localhost:"+port)
-	if err := http.ListenAndServe(":"+port, nil); err != nil {
-		slog.Error("Server failed", "error", err)
-		os.Exit(1)
-	}
 }

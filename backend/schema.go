@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -77,22 +79,26 @@ func (c *TinybirdClient) FetchSchema() (*Schema, error) {
 	return schema, nil
 }
 
+// sanitizeColumnName converts a column name to a valid Lark terminal name
+// Lark requires terminals to be ALL_UPPERCASE
+func sanitizeColumnName(name string) string {
+	re := regexp.MustCompile(`[^A-Za-z0-9_]`)
+	sanitized := re.ReplaceAllString(name, "_")
+	return "COL_" + strings.ToUpper(sanitized)
+}
+
 // GenerateGrammar creates a Lark grammar from the schema
 func (s *Schema) GenerateGrammar() string {
 	var sb strings.Builder
 
-	// Header
-	sb.WriteString(`// Auto-generated ClickHouse SQL grammar
-// ---------- Whitespace ----------
-SP: " "
+	// Header - Lark uses # for comments, not //
+	sb.WriteString(`# Auto-generated ClickHouse SQL grammar
 
-// ---------- Punctuation ----------
+SP: " "
 COMMA: ","
 SEMI: ";"
 LPAREN: "("
 RPAREN: ")"
-
-// ---------- Operators ----------
 GT: ">"
 LT: "<"
 GTE: ">="
@@ -100,18 +106,11 @@ LTE: "<="
 EQ: "="
 NEQ: "!="
 
-// ---------- Start ----------
 start: select_stmt SEMI
-
-// ---------- SELECT statement ----------
 select_stmt: "SELECT" SP select_list SP "FROM" SP table (SP where_clause)? (SP group_clause)? (SP order_clause)? (SP limit_clause)?
-
-// ---------- Select list ----------
 select_list: select_item (COMMA SP select_item)*
 select_item: agg_expr | column | star
 star: "*"
-
-// ---------- Aggregation ----------
 agg_expr: agg_func LPAREN agg_arg RPAREN (SP "AS" SP alias)?
 agg_func: "SUM" | "COUNT" | "AVG" | "MIN" | "MAX"
 agg_arg: column | star
@@ -119,19 +118,25 @@ alias: IDENTIFIER
 
 `)
 
-	// Generate table rule
-	sb.WriteString("// ---------- Tables ----------\n")
+	// Generate table rule - sorted for deterministic output
+	sb.WriteString("# Tables\n")
 	if len(s.Datasources) > 0 {
-		var tableNames []string
+		tableNames := make([]string, 0, len(s.Datasources))
 		for _, ds := range s.Datasources {
-			tableNames = append(tableNames, fmt.Sprintf(`"%s"`, ds.Name))
+			tableNames = append(tableNames, ds.Name)
 		}
-		sb.WriteString(fmt.Sprintf("table: %s\n\n", strings.Join(tableNames, " | ")))
+		sort.Strings(tableNames)
+
+		quotedNames := make([]string, 0, len(tableNames))
+		for _, name := range tableNames {
+			quotedNames = append(quotedNames, fmt.Sprintf(`"%s"`, name))
+		}
+		sb.WriteString(fmt.Sprintf("table: %s\n\n", strings.Join(quotedNames, " | ")))
 	} else {
 		sb.WriteString("table: IDENTIFIER\n\n")
 	}
 
-	// Collect all unique columns across all tables
+	// Collect all unique columns across all tables - use sorted slice for determinism
 	columnSet := make(map[string]bool)
 	for _, ds := range s.Datasources {
 		for _, col := range ds.Columns {
@@ -139,41 +144,37 @@ alias: IDENTIFIER
 		}
 	}
 
-	// Generate column rules
-	sb.WriteString("// ---------- Columns ----------\n")
-	if len(columnSet) > 0 {
-		var colRules []string
-		i := 0
-		for colName := range columnSet {
-			ruleName := fmt.Sprintf("COL_%d", i)
+	// Sort column names for deterministic output
+	columnNames := make([]string, 0, len(columnSet))
+	for name := range columnSet {
+		columnNames = append(columnNames, name)
+	}
+	sort.Strings(columnNames)
+
+	// Generate column rules with meaningful names
+	sb.WriteString("# Columns\n")
+	if len(columnNames) > 0 {
+		colRules := make([]string, 0, len(columnNames))
+		for _, colName := range columnNames {
+			ruleName := sanitizeColumnName(colName)
 			sb.WriteString(fmt.Sprintf("%s: \"%s\"\n", ruleName, colName))
 			colRules = append(colRules, ruleName)
-			i++
 		}
 		sb.WriteString(fmt.Sprintf("column: %s\n\n", strings.Join(colRules, " | ")))
 	} else {
 		sb.WriteString("column: IDENTIFIER\n\n")
 	}
 
-	// WHERE clause
-	sb.WriteString(`// ---------- WHERE clause ----------
-where_clause: "WHERE" SP condition (SP "AND" SP condition)*
+	// WHERE clause and remaining rules
+	sb.WriteString(`where_clause: "WHERE" SP condition (SP "AND" SP condition)*
 condition: column SP compare_op SP value
 compare_op: GTE | LTE | GT | LT | EQ | NEQ
 value: STRING | NUMBER | DATETIME
-
-// ---------- GROUP BY ----------
 group_clause: "GROUP" SP "BY" SP column (COMMA SP column)*
-
-// ---------- ORDER BY ----------
 order_clause: "ORDER" SP "BY" SP sort_item (COMMA SP sort_item)*
 sort_item: column (SP sort_dir)?
 sort_dir: "ASC" | "DESC"
-
-// ---------- LIMIT ----------
 limit_clause: "LIMIT" SP NUMBER
-
-// ---------- Terminals ----------
 IDENTIFIER: /[A-Za-z_][A-Za-z0-9_]*/
 NUMBER: /[0-9]+(\.[0-9]+)?/
 STRING: /'[^']*'/
@@ -190,9 +191,30 @@ func (s *Schema) GenerateToolDescription() string {
 	sb.WriteString("Generates valid ClickHouse SQL queries.\n\n")
 	sb.WriteString("Available tables and columns:\n")
 
+	// Sort datasources for deterministic output
+	dsNames := make([]string, 0, len(s.Datasources))
+	dsMap := make(map[string]Datasource)
 	for _, ds := range s.Datasources {
+		dsNames = append(dsNames, ds.Name)
+		dsMap[ds.Name] = ds
+	}
+	sort.Strings(dsNames)
+
+	for _, name := range dsNames {
+		ds := dsMap[name]
 		sb.WriteString(fmt.Sprintf("\n## %s\n", ds.Name))
+
+		// Sort columns within each datasource
+		colNames := make([]string, 0, len(ds.Columns))
+		colMap := make(map[string]Column)
 		for _, col := range ds.Columns {
+			colNames = append(colNames, col.Name)
+			colMap[col.Name] = col
+		}
+		sort.Strings(colNames)
+
+		for _, colName := range colNames {
+			col := colMap[colName]
 			sb.WriteString(fmt.Sprintf("- %s (%s)\n", col.Name, col.Type))
 		}
 	}
@@ -208,3 +230,22 @@ func (s *Schema) GenerateToolDescription() string {
 	return sb.String()
 }
 
+// GenerateUserHint creates a brief, user-friendly summary of available data
+func (s *Schema) GenerateUserHint() string {
+	if len(s.Datasources) == 0 {
+		return "No data available."
+	}
+
+	var parts []string
+	for _, ds := range s.Datasources {
+		colNames := make([]string, 0, len(ds.Columns))
+		for _, col := range ds.Columns {
+			colNames = append(colNames, col.Name)
+		}
+		sort.Strings(colNames)
+		parts = append(parts, fmt.Sprintf("%s (%s)", ds.Name, strings.Join(colNames, ", ")))
+	}
+	sort.Strings(parts)
+
+	return "Available data: " + strings.Join(parts, "; ")
+}

@@ -6,25 +6,39 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
+	"time"
 )
 
 type OpenAIClient struct {
 	apiKey          string
 	grammar         string
 	toolDescription string
+	userHint        string // brief description of available data for error messages
 }
 
-func NewOpenAIClient() *OpenAIClient {
+// ErrUnsupportedQuery is returned when the LLM determines the query
+// cannot be answered with the available schema.
+type ErrUnsupportedQuery struct {
+	Reason        string
+	AvailableData string
+}
+
+func (e ErrUnsupportedQuery) Error() string {
+	return e.Reason
+}
+
+func NewOpenAIClient(cfg *Config) *OpenAIClient {
 	return &OpenAIClient{
-		apiKey: os.Getenv("OPENAI_API_KEY"),
+		apiKey: cfg.OpenAIAPIKey,
 	}
 }
 
-// SetSchema updates the grammar and tool description based on schema
+// SetSchema updates the grammar and tool description based on schema.
+// This MUST be called before GenerateSQL - there is no fallback.
 func (c *OpenAIClient) SetSchema(schema *Schema) {
 	c.grammar = schema.GenerateGrammar()
 	c.toolDescription = schema.GenerateToolDescription()
+	c.userHint = schema.GenerateUserHint()
 }
 
 // Request/Response types for OpenAI Responses API
@@ -40,12 +54,18 @@ type Tool struct {
 	Name        string      `json:"name"`
 	Description string      `json:"description"`
 	Format      *ToolFormat `json:"format,omitempty"`
+	Parameters  interface{} `json:"parameters,omitempty"`
 }
 
 type ToolFormat struct {
 	Type       string `json:"type"`
 	Syntax     string `json:"syntax"`
 	Definition string `json:"definition"`
+}
+
+// CannotAnswerInput is the JSON structure for the cannot_answer tool
+type CannotAnswerInput struct {
+	Reason string `json:"reason"`
 }
 
 type ResponsesResponse struct {
@@ -65,28 +85,55 @@ type OutputItem struct {
 }
 
 func (c *OpenAIClient) GenerateSQL(naturalLanguage string) (string, error) {
-	// Use dynamic grammar if set, otherwise fall back to static
-	grammar := c.grammar
-	if grammar == "" {
-		grammar = ClickHouseGrammar
+	return c.GenerateSQLWithTime(naturalLanguage, time.Now().UTC())
+}
+
+// GenerateSQLWithTime generates SQL with a specific reference time.
+// Use this for testing with predictable timestamps.
+func (c *OpenAIClient) GenerateSQLWithTime(naturalLanguage string, currentTime time.Time) (string, error) {
+	if c.grammar == "" || c.toolDescription == "" {
+		return "", fmt.Errorf("schema not set: call SetSchema before GenerateSQL")
 	}
-	toolDesc := c.toolDescription
-	if toolDesc == "" {
-		toolDesc = ToolDescription
-	}
+
+	// Format time in ClickHouse-compatible format
+	timeStr := currentTime.Format("2006-01-02 15:04:05")
 
 	reqBody := ResponsesRequest{
 		Model: "gpt-5",
-		Input: fmt.Sprintf("Convert this natural language query to a valid ClickHouse SQL query. Call the sql_generator tool with the query.\n\nQuery: %s", naturalLanguage),
+		Input: fmt.Sprintf(`Convert this natural language query to a valid ClickHouse SQL query.
+
+If the query CAN be answered with the available schema, call the sql_generator tool.
+If the query CANNOT be answered (asks for data not in the schema, or is unrelated to the database), call the cannot_answer tool with a brief explanation.
+
+Current UTC time: %s
+Use this timestamp for any relative time calculations (e.g., 'last 30 hours' means since %s minus 30 hours).
+
+Query: %s`,
+			timeStr, timeStr, naturalLanguage),
 		Tools: []Tool{
 			{
 				Type:        "custom",
 				Name:        "sql_generator",
-				Description: toolDesc,
+				Description: c.toolDescription,
 				Format: &ToolFormat{
 					Type:       "grammar",
 					Syntax:     "lark",
-					Definition: grammar,
+					Definition: c.grammar,
+				},
+			},
+			{
+				Type:        "function",
+				Name:        "cannot_answer",
+				Description: "Call this when the query cannot be answered with the available database schema. Use this for questions about data that doesn't exist in the tables, or for completely unrelated questions.",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"reason": map[string]interface{}{
+							"type":        "string",
+							"description": "Brief explanation of why this query cannot be answered",
+						},
+					},
+					"required": []string{"reason"},
 				},
 			},
 		},
@@ -127,8 +174,24 @@ func (c *OpenAIClient) GenerateSQL(naturalLanguage string) (string, error) {
 
 	// Find the tool call output
 	for _, item := range result.Output {
+		// SQL generator tool - return the generated SQL
 		if item.Type == "custom_tool_call" && item.Name == "sql_generator" {
 			return item.Input, nil
+		}
+
+		// Cannot answer tool - return specific error with available data hint
+		if item.Type == "function_call" && item.Name == "cannot_answer" {
+			var input CannotAnswerInput
+			if err := json.Unmarshal([]byte(item.Input), &input); err != nil {
+				return "", ErrUnsupportedQuery{
+					Reason:        "Query cannot be answered with available data",
+					AvailableData: c.userHint,
+				}
+			}
+			return "", ErrUnsupportedQuery{
+				Reason:        input.Reason,
+				AvailableData: c.userHint,
+			}
 		}
 	}
 

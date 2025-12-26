@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 )
 
@@ -22,14 +21,10 @@ type TinybirdResponse struct {
 	Statistics map[string]interface{}   `json:"statistics"`
 }
 
-func NewTinybirdClient() *TinybirdClient {
-	host := os.Getenv("TINYBIRD_HOST")
-	if host == "" {
-		host = "https://api.us-west-2.aws.tinybird.co"
-	}
+func NewTinybirdClient(cfg *Config) *TinybirdClient {
 	return &TinybirdClient{
-		host:  host,
-		token: os.Getenv("TINYBIRD_TOKEN"),
+		host:  cfg.TinybirdHost,
+		token: cfg.TinybirdToken,
 	}
 }
 
@@ -67,4 +62,3 @@ func (c *TinybirdClient) ExecuteQuery(sql string) (*TinybirdResponse, error) {
 
 	return &result, nil
 }
-

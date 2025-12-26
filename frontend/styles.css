@@ -297,6 +297,22 @@ tr:hover td {
     flex-shrink: 0;
 }
 
+.error-hint {
+    margin-top: 0.75rem;
+    padding: 1rem 1.25rem;
+    background: rgba(139, 92, 246, 0.1);
+    border: 1px solid var(--primary);
+    border-radius: 10px;
+    color: var(--text-secondary);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.85rem;
+    line-height: 1.5;
+}
+
+.error-hint::before {
+    content: "💡 ";
+}
+
 footer {
     text-align: center;
     padding-top: 3rem;
