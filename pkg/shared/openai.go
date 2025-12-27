@@ -98,15 +98,19 @@ func (c *OpenAIClient) GenerateSQLWithTime(naturalLanguage string, currentTime t
 		Model: "gpt-5",
 		Input: fmt.Sprintf(`Convert this natural language query to a valid ClickHouse SQL query.
 
-There is only ONE table: order_items
-If the query CAN be answered with the available schema, call the sql_generator tool.
-If the query CANNOT be answered (asks for data not in the schema, or is unrelated to the database), call the cannot_answer tool with a brief explanation.
+There is only ONE table: order_items. Each row IS an order - do NOT use GROUP BY order_id.
+
+IMPORTANT - when to use GROUP BY:
+- "top N orders by price" → NO GROUP BY, just: SELECT * FROM order_items ORDER BY price DESC LIMIT N
+- "total revenue" → NO GROUP BY: SELECT SUM(price) FROM order_items
+- "revenue PER seller" or "BY seller" → USE GROUP BY: SELECT seller_id, SUM(price) FROM order_items GROUP BY seller_id
+
+Only use GROUP BY when the user explicitly asks for aggregation BY a dimension (per seller, by product, etc).
 
 Current UTC time: %s
-Use this timestamp for any relative time calculations (e.g., 'last 30 hours' means since %s minus 30 hours).
 
 Query: %s`,
-			timeStr, timeStr, naturalLanguage),
+			timeStr, naturalLanguage),
 		Tools: []Tool{
 			{
 				Type:        "custom",
