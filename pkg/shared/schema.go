@@ -243,4 +243,3 @@ func (s *Schema) GenerateUserHint() string {
 
 	return "Available data: " + strings.Join(parts, "; ")
 }
-

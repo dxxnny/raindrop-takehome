@@ -98,6 +98,7 @@ func (c *OpenAIClient) GenerateSQLWithTime(naturalLanguage string, currentTime t
 		Model: "gpt-5",
 		Input: fmt.Sprintf(`Convert this natural language query to a valid ClickHouse SQL query.
 
+There is only ONE table: order_items
 If the query CAN be answered with the available schema, call the sql_generator tool.
 If the query CANNOT be answered (asks for data not in the schema, or is unrelated to the database), call the cannot_answer tool with a brief explanation.
 
@@ -190,4 +191,3 @@ Query: %s`,
 
 	return "", fmt.Errorf("no SQL generated in response")
 }
-
